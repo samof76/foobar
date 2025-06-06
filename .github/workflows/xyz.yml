@@ -1,15 +1,154 @@
-name: Hello World Workflow
+name: Private Code Honeypot Alert - Simple
 
-# Trigger the workflow on push events to any branch
+# Trigger on any push to detect potential private code exposure
 on:
   push:
     branches:
-      - "**" # This matches all branches including new ones
+      - "**"
 
 jobs:
-  hello-world:
+  honeypot-alert:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Say Hello World
-        run: echo "hello world"
+      - name: Check Repository Authorization
+        id: check-authorization
+        run: |
+          # Define the ONE authorized repository for this workflow
+          # CUSTOMIZE THIS: Replace with your actual repository name
+          AUTHORIZED_REPO="pych/foobar"
+
+          CURRENT_REPO="${{ github.repository }}"
+
+          echo "Current repository: $CURRENT_REPO"
+          echo "Authorized repository: $AUTHORIZED_REPO"
+          echo "authorized_repo=$AUTHORIZED_REPO" >> $GITHUB_OUTPUT
+
+          if [ "$CURRENT_REPO" = "$AUTHORIZED_REPO" ]; then
+            echo "✅ Repository is authorized"
+            echo "is_authorized=true" >> $GITHUB_OUTPUT
+          else
+            echo "🚨 UNAUTHORIZED REPOSITORY DETECTED!"
+            echo "is_authorized=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Repository Details
+        id: repo-details
+        if: steps.check-authorization.outputs.is_authorized == 'false'
+        run: |
+          # Get repository information using GitHub API (works without auth)
+          REPO_INFO=$(curl -s "https://api.github.com/repos/${{ github.repository }}")
+
+          # Extract key information
+          IS_PRIVATE=$(echo "$REPO_INFO" | jq -r '.private // false')
+          VISIBILITY=$(echo "$REPO_INFO" | jq -r '.visibility // "unknown"')
+          OWNER_TYPE=$(echo "$REPO_INFO" | jq -r '.owner.type // "unknown"')
+          CREATED_AT=$(echo "$REPO_INFO" | jq -r '.created_at // "unknown"')
+
+          echo "is_private=$IS_PRIVATE" >> $GITHUB_OUTPUT
+          echo "visibility=$VISIBILITY" >> $GITHUB_OUTPUT
+          echo "owner_type=$OWNER_TYPE" >> $GITHUB_OUTPUT
+          echo "created_at=$CREATED_AT" >> $GITHUB_OUTPUT
+
+      - name: Send Honeypot Alert
+        if: steps.check-authorization.outputs.is_authorized == 'false'
+        run: |
+          # Hardcoded webhook URL - CUSTOMIZE THIS
+          WEBHOOK_URL="https://httpbin.org/post"
+
+          # Determine incident type based on repository visibility
+          if [ "${{ steps.repo-details.outputs.is_private }}" = "false" ]; then
+            INCIDENT_TYPE="PUBLIC_REPOSITORY_EXPOSURE"
+            SEVERITY="CRITICAL"
+            DESCRIPTION="🚨 Private code detected in PUBLIC repository - immediate exposure!"
+          else
+            INCIDENT_TYPE="UNAUTHORIZED_PRIVATE_REPOSITORY"
+            SEVERITY="HIGH"
+            DESCRIPTION="🚨 Private code detected in UNAUTHORIZED private repository - potential theft!"
+          fi
+
+          # Create alert payload
+          ALERT_PAYLOAD=$(cat <<EOF
+          {
+            "alert_type": "$INCIDENT_TYPE",
+            "impacted_repo": "${{ steps.check-authorization.outputs.authorized_repo }}",
+            "severity": "$SEVERITY",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "description": "$DESCRIPTION",
+            "authorized_repository": "your-org/your-private-repo",
+            "detected_repository": {
+              "name": "${{ github.repository }}",
+              "owner": "${{ github.repository_owner }}",
+              "is_private": ${{ steps.repo-details.outputs.is_private }},
+              "visibility": "${{ steps.repo-details.outputs.visibility }}",
+              "owner_type": "${{ steps.repo-details.outputs.owner_type }}",
+              "created_at": "${{ steps.repo-details.outputs.created_at }}",
+              "url": "https://github.com/${{ github.repository }}"
+            },
+            "push_details": {
+              "ref": "${{ github.ref }}",
+              "sha": "${{ github.sha }}",
+              "actor": "${{ github.actor }}",
+              "event": "${{ github.event_name }}",
+              "run_url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            },
+            "commit_info": {
+              "message": $(echo '${{ github.event.head_commit.message }}' | jq -R .),
+              "author": {
+                "name": "${{ github.event.head_commit.author.name }}",
+                "email": "${{ github.event.head_commit.author.email }}"
+              },
+              "added_files": $(echo '${{ toJson(github.event.head_commit.added) }}'),
+              "modified_files": $(echo '${{ toJson(github.event.head_commit.modified) }}'),
+              "removed_files": $(echo '${{ toJson(github.event.head_commit.removed) }}')
+            }
+          }
+          EOF
+          )
+
+          echo "🚨 Sending security alert..."
+          echo "Incident: $INCIDENT_TYPE"
+          echo "Severity: $SEVERITY"
+
+          # Send webhook alert
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: GitHub-Honeypot-Simple/1.0" \
+            -H "X-Alert-Source: github-actions" \
+            -d "$ALERT_PAYLOAD" \
+            "$WEBHOOK_URL" || echo "⚠️ Webhook delivery failed (but continuing to fail workflow)"
+
+      - name: Fail Workflow - Unauthorized Repository
+        if: steps.check-authorization.outputs.is_authorized == 'false'
+        run: |
+          echo ""
+          echo "🚨🚨🚨 SECURITY VIOLATION DETECTED! 🚨🚨🚨"
+          echo ""
+          echo "Expected repository: ${{ steps.check-authorization.outputs.authorized_repo }}"
+          echo "Current repository:  ${{ github.repository }}"
+          echo ""
+          if [ "${{ steps.repo-details.outputs.is_private }}" = "false" ]; then
+            echo "🔓 CRITICAL: Code is in a PUBLIC repository!"
+            echo "   Anyone on the internet can access this code!"
+          else
+            echo "🔒 HIGH RISK: Code is in an UNAUTHORIZED private repository!"
+            echo "   This may indicate code theft or accidental push!"
+          fi
+          echo ""
+          echo "IMMEDIATE ACTIONS REQUIRED:"
+          echo "1. 🔍 Review all files for sensitive information"
+          echo "2. 🔐 Rotate any exposed credentials/API keys"
+          echo "3. 🗑️  Delete repository or remove sensitive content"
+          echo "4. 🕵️  Investigate how code reached this location"
+          echo "5. 📞 Contact security team immediately"
+          echo ""
+          echo "A security alert has been sent to: https://httpbin.org/post"
+          echo ""
+          exit 1
+
+      - name: Log Authorized Execution
+        if: steps.check-authorization.outputs.is_authorized == 'true'
+        run: |
+          echo "✅ Honeypot check passed"
+          echo "Repository: ${{ github.repository }}"
+          echo "Status: Authorized"
