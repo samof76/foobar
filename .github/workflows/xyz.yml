@@ -71,11 +71,10 @@ jobs:
           ALERT_PAYLOAD=$(cat <<EOF
           {
             "alert_type": "$INCIDENT_TYPE",
-            "impacted_repo": "${{ steps.check-authorization.outputs.authorized_repo }}",
+            "authorized_repository": "${{ steps.check-authorization.outputs.authorized_repo }}",
             "severity": "$SEVERITY",
             "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "description": "$DESCRIPTION",
-            "authorized_repository": "your-org/your-private-repo",
             "detected_repository": {
               "name": "${{ github.repository }}",
               "owner": "${{ github.repository_owner }}",
@@ -115,6 +114,8 @@ jobs:
             -H "Content-Type: application/json" \
             -H "User-Agent: GitHub-Honeypot-Simple/1.0" \
             -H "X-Alert-Source: github-actions" \
+            -H "X-Alert-Org-Repo: ${{ steps.check-authorization.outputs.authorized_repo }}" \
+            -H "X-Alert-Repo: ${{ github.repository }}" \
             -d "$ALERT_PAYLOAD" \
             "$WEBHOOK_URL" || echo "⚠️ Webhook delivery failed (but continuing to fail workflow)"
 
